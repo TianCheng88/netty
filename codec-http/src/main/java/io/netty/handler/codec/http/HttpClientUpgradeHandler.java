@@ -18,6 +18,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandler;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.AsciiString;
+import io.netty.util.internal.ObjectUtil;
 
 import java.net.SocketAddress;
 import java.util.Collection;
@@ -115,14 +116,8 @@ public class HttpClientUpgradeHandler extends HttpObjectAggregator implements Ch
     public HttpClientUpgradeHandler(SourceCodec sourceCodec, UpgradeCodec upgradeCodec,
                                     int maxContentLength) {
         super(maxContentLength);
-        if (sourceCodec == null) {
-            throw new NullPointerException("sourceCodec");
-        }
-        if (upgradeCodec == null) {
-            throw new NullPointerException("upgradeCodec");
-        }
-        this.sourceCodec = sourceCodec;
-        this.upgradeCodec = upgradeCodec;
+        this.sourceCodec = ObjectUtil.checkNotNull(sourceCodec, "sourceCodec");
+        this.upgradeCodec = ObjectUtil.checkNotNull(upgradeCodec, "upgradeCodec");
     }
 
     @Override
@@ -277,6 +272,6 @@ public class HttpClientUpgradeHandler extends HttpObjectAggregator implements Ch
             builder.append(',');
         }
         builder.append(HttpHeaderValues.UPGRADE);
-        request.headers().set(HttpHeaderNames.CONNECTION, builder.toString());
+        request.headers().add(HttpHeaderNames.CONNECTION, builder.toString());
     }
 }

@@ -44,7 +44,7 @@ import java.util.List;
 
 public class SocketTestPermutation {
 
-    static final String BAD_HOST = SystemPropertyUtil.get("io.netty.testsuite.badHost", "netty.io");
+    static final String BAD_HOST = SystemPropertyUtil.get("io.netty.testsuite.badHost", "198.51.100.254");
     static final int BAD_PORT = SystemPropertyUtil.getInt("io.netty.testsuite.badPort", 65535);
 
     static {
@@ -70,6 +70,7 @@ public class SocketTestPermutation {
             new OioEventLoopGroup(Integer.MAX_VALUE, new DefaultThreadFactory("testsuite-oio-worker", true));
 
     protected <A extends AbstractBootstrap<?, ?>, B extends AbstractBootstrap<?, ?>>
+
     List<BootstrapComboFactory<A, B>> combo(List<BootstrapFactory<A>> sbfs, List<BootstrapFactory<B>> cbfs) {
 
         List<BootstrapComboFactory<A, B>> list = new ArrayList<BootstrapComboFactory<A, B>>();
@@ -112,7 +113,7 @@ public class SocketTestPermutation {
         return list;
     }
 
-    public List<BootstrapComboFactory<Bootstrap, Bootstrap>> datagram() {
+    public List<BootstrapComboFactory<Bootstrap, Bootstrap>> datagram(final InternetProtocolFamily family) {
         // Make the list of Bootstrap factories.
         List<BootstrapFactory<Bootstrap>> bfs = Arrays.asList(
                 new BootstrapFactory<Bootstrap>() {
@@ -121,7 +122,7 @@ public class SocketTestPermutation {
                         return new Bootstrap().group(nioWorkerGroup).channelFactory(new ChannelFactory<Channel>() {
                             @Override
                             public Channel newChannel() {
-                                return new NioDatagramChannel(InternetProtocolFamily.IPv4);
+                                return new NioDatagramChannel(family);
                             }
 
                             @Override

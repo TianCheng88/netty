@@ -91,7 +91,8 @@ public final class ClientCookieEncoder extends CookieEncoder {
      * Sort cookies into decreasing order of path length, breaking ties by sorting into increasing chronological
      * order of creation time, as recommended by RFC 6265.
      */
-    private static final Comparator<Cookie> COOKIE_COMPARATOR = new Comparator<Cookie>() {
+    // package-private for testing only.
+    static final Comparator<Cookie> COOKIE_COMPARATOR = new Comparator<Cookie>() {
         @Override
         public int compare(Cookie c1, Cookie c2) {
             String path1 = c1.path();
@@ -103,13 +104,10 @@ public final class ClientCookieEncoder extends CookieEncoder {
             // limited use.
             int len1 = path1 == null ? Integer.MAX_VALUE : path1.length();
             int len2 = path2 == null ? Integer.MAX_VALUE : path2.length();
-            int diff = len2 - len1;
-            if (diff != 0) {
-                return diff;
-            }
-            // Rely on Java's sort stability to retain creation order in cases where
+
+            // Rely on Arrays.sort's stability to retain creation order in cases where
             // cookies have same path length.
-            return -1;
+            return len2 - len1;
         }
     };
 
@@ -161,7 +159,7 @@ public final class ClientCookieEncoder extends CookieEncoder {
             if (cookies.size() == 1) {
                 encode(buf, cookies.iterator().next());
             } else {
-                Cookie[] cookiesSorted = cookies.toArray(new Cookie[cookies.size()]);
+                Cookie[] cookiesSorted = cookies.toArray(new Cookie[0]);
                 Arrays.sort(cookiesSorted, COOKIE_COMPARATOR);
                 for (Cookie c : cookiesSorted) {
                     encode(buf, c);
@@ -198,7 +196,7 @@ public final class ClientCookieEncoder extends CookieEncoder {
                 while (cookiesIt.hasNext()) {
                     cookiesList.add(cookiesIt.next());
                 }
-                Cookie[] cookiesSorted = cookiesList.toArray(new Cookie[cookiesList.size()]);
+                Cookie[] cookiesSorted = cookiesList.toArray(new Cookie[0]);
                 Arrays.sort(cookiesSorted, COOKIE_COMPARATOR);
                 for (Cookie c : cookiesSorted) {
                     encode(buf, c);

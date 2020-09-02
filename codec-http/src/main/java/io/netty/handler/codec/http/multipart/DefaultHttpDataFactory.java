@@ -15,25 +15,29 @@
  */
 package io.netty.handler.codec.http.multipart;
 
+import io.netty.handler.codec.http.DefaultHttpRequest;
 import io.netty.handler.codec.http.HttpConstants;
 import io.netty.handler.codec.http.HttpRequest;
-import io.netty.util.internal.PlatformDependent;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
 /**
- * Default factory giving Attribute and FileUpload according to constructor
+ * Default factory giving {@link Attribute} and {@link FileUpload} according to constructor.
  *
- * Attribute and FileUpload could be :<br>
- * - MemoryAttribute, DiskAttribute or MixedAttribute<br>
- * - MemoryFileUpload, DiskFileUpload or MixedFileUpload<br>
- * according to the constructor.
+ * <p>According to the constructor, {@link Attribute} and {@link FileUpload} can be:</p>
+ * <ul>
+ * <li>MemoryAttribute, DiskAttribute or MixedAttribute</li>
+ * <li>MemoryFileUpload, DiskFileUpload or MixedFileUpload</li>
+ * </ul>
  */
 public class DefaultHttpDataFactory implements HttpDataFactory {
 
@@ -56,10 +60,19 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
 
     private Charset charset = HttpConstants.DEFAULT_CHARSET;
 
+    private String baseDir;
+
+    private boolean deleteOnExit; // false is a good default cause true leaks
+
     /**
-     * Keep all HttpDatas until cleanAllHttpData() is called.
+     * Keep all {@link HttpData}s until cleaning methods are called.
+     * We need to use {@link IdentityHashMap} because different requests may be equal.
+     * See {@link DefaultHttpRequest#hashCode} and {@link DefaultHttpRequest#equals}.
+     * Similarly, when removing data items, we need to check their identities because
+     * different data items may be equal.
      */
-    private final Map<HttpRequest, List<HttpData>> requestFileDeleteMap = PlatformDependent.newConcurrentHashMap();
+    private final Map<HttpRequest, List<HttpData>> requestFileDeleteMap =
+            Collections.synchronizedMap(new IdentityHashMap<HttpRequest, List<HttpData>>());
 
     /**
      * HttpData will be in memory if less than default size (16KB).
@@ -103,13 +116,32 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
         this.charset = charset;
     }
 
+    /**
+     * Override global {@link DiskAttribute#baseDirectory} and {@link DiskFileUpload#baseDirectory} values.
+     *
+     * @param baseDir directory path where to store disk attributes and file uploads.
+     */
+    public void setBaseDir(String baseDir) {
+        this.baseDir = baseDir;
+    }
+
+    /**
+     * Override global {@link DiskAttribute#deleteOnExitTemporaryFile} and
+     * {@link DiskFileUpload#deleteOnExitTemporaryFile} values.
+     *
+     * @param deleteOnExit true if temporary files should be deleted with the JVM, false otherwise.
+     */
+    public void setDeleteOnExit(boolean deleteOnExit) {
+        this.deleteOnExit = deleteOnExit;
+    }
+
     @Override
     public void setMaxLimit(long maxSize) {
         this.maxSize = maxSize;
     }
 
     /**
-     * @return the associated list of Files for the request
+     * @return the associated list of {@link HttpData} for the request
      */
     private List<HttpData> getList(HttpRequest request) {
         List<HttpData> list = requestFileDeleteMap.get(request);
@@ -123,17 +155,17 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
     @Override
     public Attribute createAttribute(HttpRequest request, String name) {
         if (useDisk) {
-            Attribute attribute = new DiskAttribute(name, charset);
+            Attribute attribute = new DiskAttribute(name, charset, baseDir, deleteOnExit);
             attribute.setMaxSize(maxSize);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(attribute);
+            List<HttpData> list = getList(request);
+            list.add(attribute);
             return attribute;
         }
         if (checkSize) {
-            Attribute attribute = new MixedAttribute(name, minSize, charset);
+            Attribute attribute = new MixedAttribute(name, minSize, charset, baseDir, deleteOnExit);
             attribute.setMaxSize(maxSize);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(attribute);
+            List<HttpData> list = getList(request);
+            list.add(attribute);
             return attribute;
         }
         MemoryAttribute attribute = new MemoryAttribute(name);
@@ -144,17 +176,17 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
     @Override
     public Attribute createAttribute(HttpRequest request, String name, long definedSize) {
         if (useDisk) {
-            Attribute attribute = new DiskAttribute(name, definedSize, charset);
+            Attribute attribute = new DiskAttribute(name, definedSize, charset, baseDir, deleteOnExit);
             attribute.setMaxSize(maxSize);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(attribute);
+            List<HttpData> list = getList(request);
+            list.add(attribute);
             return attribute;
         }
         if (checkSize) {
-            Attribute attribute = new MixedAttribute(name, definedSize, minSize, charset);
+            Attribute attribute = new MixedAttribute(name, definedSize, minSize, charset, baseDir, deleteOnExit);
             attribute.setMaxSize(maxSize);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(attribute);
+            List<HttpData> list = getList(request);
+            list.add(attribute);
             return attribute;
         }
         MemoryAttribute attribute = new MemoryAttribute(name, definedSize);
@@ -178,24 +210,24 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
         if (useDisk) {
             Attribute attribute;
             try {
-                attribute = new DiskAttribute(name, value, charset);
+                attribute = new DiskAttribute(name, value, charset, baseDir, deleteOnExit);
                 attribute.setMaxSize(maxSize);
             } catch (IOException e) {
                 // revert to Mixed mode
-                attribute = new MixedAttribute(name, value, minSize, charset);
+                attribute = new MixedAttribute(name, value, minSize, charset, baseDir, deleteOnExit);
                 attribute.setMaxSize(maxSize);
             }
             checkHttpDataSize(attribute);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(attribute);
+            List<HttpData> list = getList(request);
+            list.add(attribute);
             return attribute;
         }
         if (checkSize) {
-            Attribute attribute = new MixedAttribute(name, value, minSize, charset);
+            Attribute attribute = new MixedAttribute(name, value, minSize, charset, baseDir, deleteOnExit);
             attribute.setMaxSize(maxSize);
             checkHttpDataSize(attribute);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(attribute);
+            List<HttpData> list = getList(request);
+            list.add(attribute);
             return attribute;
         }
         try {
@@ -214,20 +246,20 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
             long size) {
         if (useDisk) {
             FileUpload fileUpload = new DiskFileUpload(name, filename, contentType,
-                    contentTransferEncoding, charset, size);
+                    contentTransferEncoding, charset, size, baseDir, deleteOnExit);
             fileUpload.setMaxSize(maxSize);
             checkHttpDataSize(fileUpload);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(fileUpload);
+            List<HttpData> list = getList(request);
+            list.add(fileUpload);
             return fileUpload;
         }
         if (checkSize) {
             FileUpload fileUpload = new MixedFileUpload(name, filename, contentType,
-                    contentTransferEncoding, charset, size, minSize);
+                    contentTransferEncoding, charset, size, minSize, baseDir, deleteOnExit);
             fileUpload.setMaxSize(maxSize);
             checkHttpDataSize(fileUpload);
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.add(fileUpload);
+            List<HttpData> list = getList(request);
+            list.add(fileUpload);
             return fileUpload;
         }
         MemoryFileUpload fileUpload = new MemoryFileUpload(name, filename, contentType,
@@ -239,20 +271,42 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
 
     @Override
     public void removeHttpDataFromClean(HttpRequest request, InterfaceHttpData data) {
-        if (data instanceof HttpData) {
-            List<HttpData> fileToDelete = getList(request);
-            fileToDelete.remove(data);
+        if (!(data instanceof HttpData)) {
+            return;
+        }
+
+        // Do not use getList because it adds empty list to requestFileDeleteMap
+        // if request is not found
+        List<HttpData> list = requestFileDeleteMap.get(request);
+        if (list == null) {
+            return;
+        }
+
+        // Can't simply call list.remove(data), because different data items may be equal.
+        // Need to check identity.
+        Iterator<HttpData> i = list.iterator();
+        while (i.hasNext()) {
+            HttpData n = i.next();
+            if (n == data) {
+                i.remove();
+
+                // Remove empty list to avoid memory leak
+                if (list.isEmpty()) {
+                    requestFileDeleteMap.remove(request);
+                }
+
+                return;
+            }
         }
     }
 
     @Override
     public void cleanRequestHttpData(HttpRequest request) {
-        List<HttpData> fileToDelete = requestFileDeleteMap.remove(request);
-        if (fileToDelete != null) {
-            for (HttpData data: fileToDelete) {
-                data.delete();
+        List<HttpData> list = requestFileDeleteMap.remove(request);
+        if (list != null) {
+            for (HttpData data : list) {
+                data.release();
             }
-            fileToDelete.clear();
         }
     }
 
@@ -261,15 +315,16 @@ public class DefaultHttpDataFactory implements HttpDataFactory {
         Iterator<Entry<HttpRequest, List<HttpData>>> i = requestFileDeleteMap.entrySet().iterator();
         while (i.hasNext()) {
             Entry<HttpRequest, List<HttpData>> e = i.next();
-            i.remove();
 
-            List<HttpData> fileToDelete = e.getValue();
-            if (fileToDelete != null) {
-                for (HttpData data : fileToDelete) {
-                    data.delete();
-                }
-                fileToDelete.clear();
+            // Calling i.remove() here will cause "java.lang.IllegalStateException: Entry was removed"
+            // at e.getValue() below
+
+            List<HttpData> list = e.getValue();
+            for (HttpData data : list) {
+                data.release();
             }
+
+            i.remove();
         }
     }
 

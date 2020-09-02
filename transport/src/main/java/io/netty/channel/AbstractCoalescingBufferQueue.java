@@ -17,16 +17,16 @@ package io.netty.channel;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.CompositeByteBuf;
-import io.netty.util.ReferenceCountUtil;
-import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.util.ArrayDeque;
 
+import static io.netty.util.ReferenceCountUtil.safeRelease;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
+import static io.netty.util.internal.PlatformDependent.throwException;
 
 @UnstableApi
 public abstract class AbstractCoalescingBufferQueue {
@@ -40,7 +40,7 @@ public abstract class AbstractCoalescingBufferQueue {
      *
      * @param channel the {@link Channel} which will have the {@link Channel#isWritable()} reflect the amount of queued
      *                buffers or {@code null} if there is no writability state updated.
-     * @param initSize theinitial size of the underlying queue.
+     * @param initSize the initial size of the underlying queue.
      */
     protected AbstractCoalescingBufferQueue(Channel channel, int initSize) {
         bufAndListenerPairs = new ArrayDeque<Object>(initSize);
@@ -140,6 +140,7 @@ public abstract class AbstractCoalescingBufferQueue {
 
         // Use isEmpty rather than readableBytes==0 as we may have a promise associated with an empty buffer.
         if (bufAndListenerPairs.isEmpty()) {
+            assert readableBytes == 0;
             return removeEmptyValue();
         }
         bytes = Math.min(bytes, readableBytes);
@@ -177,10 +178,10 @@ public abstract class AbstractCoalescingBufferQueue {
                 entryBuffer = null;
             }
         } catch (Throwable cause) {
-            ReferenceCountUtil.safeRelease(entryBuffer);
-            ReferenceCountUtil.safeRelease(toReturn);
+            safeRelease(entryBuffer);
+            safeRelease(toReturn);
             aggregatePromise.setFailure(cause);
-            PlatformDependent.throwException(cause);
+            throwException(cause);
         }
         decrementReadableBytes(originalBytes - bytes);
         return toReturn;
@@ -221,7 +222,6 @@ public abstract class AbstractCoalescingBufferQueue {
      * @param ctx The context to write all elements to.
      */
     public final void writeAndRemoveAll(ChannelHandlerContext ctx) {
-        decrementReadableBytes(readableBytes);
         Throwable pending = null;
         ByteBuf previousBuf = null;
         for (;;) {
@@ -229,6 +229,7 @@ public abstract class AbstractCoalescingBufferQueue {
             try {
                 if (entry == null) {
                     if (previousBuf != null) {
+                        decrementReadableBytes(previousBuf.readableBytes());
                         ctx.write(previousBuf, ctx.voidPromise());
                     }
                     break;
@@ -236,13 +237,16 @@ public abstract class AbstractCoalescingBufferQueue {
 
                 if (entry instanceof ByteBuf) {
                     if (previousBuf != null) {
+                        decrementReadableBytes(previousBuf.readableBytes());
                         ctx.write(previousBuf, ctx.voidPromise());
                     }
                     previousBuf = (ByteBuf) entry;
                 } else if (entry instanceof ChannelPromise) {
+                    decrementReadableBytes(previousBuf.readableBytes());
                     ctx.write(previousBuf, (ChannelPromise) entry);
                     previousBuf = null;
                 } else {
+                    decrementReadableBytes(previousBuf.readableBytes());
                     ctx.write(previousBuf).addListener((ChannelFutureListener) entry);
                     previousBuf = null;
                 }
@@ -276,9 +280,31 @@ public abstract class AbstractCoalescingBufferQueue {
             composite.addComponent(true, next);
         } catch (Throwable cause) {
             composite.release();
-            PlatformDependent.throwException(cause);
+            safeRelease(next);
+            throwException(cause);
         }
         return composite;
+    }
+
+    /**
+     * Compose {@code cumulation} and {@code next} into a new {@link ByteBufAllocator#ioBuffer()}.
+     * @param alloc The allocator to use to allocate the new buffer.
+     * @param cumulation The current cumulation.
+     * @param next The next buffer.
+     * @return The result of {@code cumulation + next}.
+     */
+    protected final ByteBuf copyAndCompose(ByteBufAllocator alloc, ByteBuf cumulation, ByteBuf next) {
+        ByteBuf newCumulation = alloc.ioBuffer(cumulation.readableBytes() + next.readableBytes());
+        try {
+            newCumulation.writeBytes(cumulation).writeBytes(next);
+        } catch (Throwable cause) {
+            newCumulation.release();
+            safeRelease(next);
+            throwException(cause);
+        }
+        cumulation.release();
+        next.release();
+        return newCumulation;
     }
 
     /**
@@ -304,7 +330,6 @@ public abstract class AbstractCoalescingBufferQueue {
     }
 
     private void releaseAndCompleteAll(ChannelFuture future) {
-        decrementReadableBytes(readableBytes);
         Throwable pending = null;
         for (;;) {
             Object entry = bufAndListenerPairs.poll();
@@ -313,7 +338,9 @@ public abstract class AbstractCoalescingBufferQueue {
             }
             try {
                 if (entry instanceof ByteBuf) {
-                    ReferenceCountUtil.safeRelease(entry);
+                    ByteBuf buffer = (ByteBuf) entry;
+                    decrementReadableBytes(buffer.readableBytes());
+                    safeRelease(buffer);
                 } else {
                     ((ChannelFutureListener) entry).operationComplete(future);
                 }

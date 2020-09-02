@@ -48,6 +48,27 @@ public class JsonObjectDecoderTest {
     }
 
     @Test
+    public void testMultipleJsonObjectsOverMultipleWrites() {
+        EmbeddedChannel ch = new EmbeddedChannel(new JsonObjectDecoder());
+
+        String objectPart1 = "{\"name\":\"Jo";
+        String objectPart2 = "hn\"}{\"name\":\"John\"}{\"name\":\"Jo";
+        String objectPart3 = "hn\"}";
+
+        ch.writeInbound(Unpooled.copiedBuffer(objectPart1, CharsetUtil.UTF_8));
+        ch.writeInbound(Unpooled.copiedBuffer(objectPart2, CharsetUtil.UTF_8));
+        ch.writeInbound(Unpooled.copiedBuffer(objectPart3, CharsetUtil.UTF_8));
+
+        for (int i = 0; i < 3; i++) {
+            ByteBuf res = ch.readInbound();
+            assertEquals("{\"name\":\"John\"}", res.toString(CharsetUtil.UTF_8));
+            res.release();
+        }
+
+        assertFalse(ch.finish());
+    }
+
+    @Test
     public void testJsonArrayOverMultipleWrites() {
         EmbeddedChannel ch = new EmbeddedChannel(new JsonObjectDecoder());
 
@@ -164,7 +185,7 @@ public class JsonObjectDecoderTest {
         EmbeddedChannel ch = new EmbeddedChannel(new JsonObjectDecoder());
         // {"foo" : "bar\""}
         String json = "{\"foo\" : \"bar\\\"\"}";
-        System.out.println(json);
+
         ch.writeInbound(Unpooled.copiedBuffer(json, CharsetUtil.UTF_8));
 
         ByteBuf res = ch.readInbound();
@@ -179,7 +200,7 @@ public class JsonObjectDecoderTest {
         EmbeddedChannel ch = new EmbeddedChannel(new JsonObjectDecoder());
         // {"foo" : "bar\\"}
         String json = "{\"foo\" : \"bar\\\\\"}";
-        System.out.println(json);
+
         ch.writeInbound(Unpooled.copiedBuffer(json, CharsetUtil.UTF_8));
 
         ByteBuf res = ch.readInbound();
@@ -194,7 +215,7 @@ public class JsonObjectDecoderTest {
         EmbeddedChannel ch = new EmbeddedChannel(new JsonObjectDecoder());
         // {"foo" : "bar\\\""}
         String json = "{\"foo\" : \"bar\\\\\\\"\"}";
-        System.out.println(json);
+
         ch.writeInbound(Unpooled.copiedBuffer(json, CharsetUtil.UTF_8));
 
         ByteBuf res = ch.readInbound();

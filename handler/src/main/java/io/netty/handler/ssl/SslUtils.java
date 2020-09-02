@@ -21,13 +21,22 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.base64.Base64;
 import io.netty.handler.codec.base64.Base64Dialect;
+import io.netty.util.NetUtil;
+import io.netty.util.internal.EmptyArrays;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.TrustManager;
 
 import static java.util.Arrays.asList;
 
@@ -35,7 +44,13 @@ import static java.util.Arrays.asList;
  * Constants for SSL packets.
  */
 final class SslUtils {
+    private static final InternalLogger logger = InternalLoggerFactory.getInstance(SslUtils.class);
 
+    // See https://tools.ietf.org/html/rfc8446#appendix-B.4
+    static final Set<String> TLSV13_CIPHERS = Collections.unmodifiableSet(new LinkedHashSet<String>(
+            asList("TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",
+                          "TLS_AES_128_GCM_SHA256", "TLS_AES_128_CCM_8_SHA256",
+                          "TLS_AES_128_CCM_SHA256")));
     // Protocols
     static final String PROTOCOL_SSL_V2_HELLO = "SSLv2Hello";
     static final String PROTOCOL_SSL_V2 = "SSLv2";
@@ -43,6 +58,9 @@ final class SslUtils {
     static final String PROTOCOL_TLS_V1 = "TLSv1";
     static final String PROTOCOL_TLS_V1_1 = "TLSv1.1";
     static final String PROTOCOL_TLS_V1_2 = "TLSv1.2";
+    static final String PROTOCOL_TLS_V1_3 = "TLSv1.3";
+
+    static final String INVALID_CIPHER = "SSL_NULL_WITH_NULL_NULL";
 
     /**
      * change cipher spec
@@ -84,20 +102,82 @@ final class SslUtils {
      */
     static final int NOT_ENCRYPTED = -2;
 
-    static final String[] DEFAULT_CIPHER_SUITES = {
+    static final String[] DEFAULT_CIPHER_SUITES;
+    static final String[] DEFAULT_TLSV13_CIPHER_SUITES;
+    static final String[] TLSV13_CIPHER_SUITES = { "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384" };
+
+    private static final boolean TLSV1_3_JDK_SUPPORTED;
+    private static final boolean TLSV1_3_JDK_DEFAULT_ENABLED;
+
+    static {
+        boolean tlsv13Supported = false;
+        boolean tlsv13Enabled = false;
+
+        Throwable cause = null;
+        try {
+            SSLContext context = SSLContext.getInstance("TLS");
+            context.init(null, new TrustManager[0], null);
+            for (String supported: context.getSupportedSSLParameters().getProtocols()) {
+                if (PROTOCOL_TLS_V1_3.equals(supported)) {
+                    tlsv13Supported = true;
+                    break;
+                }
+            }
+            for (String enabled: context.getDefaultSSLParameters().getProtocols()) {
+                if (PROTOCOL_TLS_V1_3.equals(enabled)) {
+                    tlsv13Enabled = true;
+                    break;
+                }
+            }
+        } catch (Throwable error) {
+            cause = error;
+        }
+        if (cause == null) {
+            logger.debug("JDK SSLEngine supports TLSv1.3: {}", tlsv13Supported);
+        } else {
+            logger.debug("Unable to detect if JDK SSLEngine supports TLSv1.3, assuming no", cause);
+        }
+        TLSV1_3_JDK_SUPPORTED = tlsv13Supported;
+        TLSV1_3_JDK_DEFAULT_ENABLED = tlsv13Enabled;
+        if (TLSV1_3_JDK_SUPPORTED) {
+            DEFAULT_TLSV13_CIPHER_SUITES = TLSV13_CIPHER_SUITES;
+        } else {
+            DEFAULT_TLSV13_CIPHER_SUITES = EmptyArrays.EMPTY_STRINGS;
+        }
+
+        List<String> defaultCiphers = new ArrayList<String>();
         // GCM (Galois/Counter Mode) requires JDK 8.
-        "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-        "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-        "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-        "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+        defaultCiphers.add("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384");
+        defaultCiphers.add("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256");
+        defaultCiphers.add("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256");
+        defaultCiphers.add("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
+        defaultCiphers.add("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA");
         // AES256 requires JCE unlimited strength jurisdiction policy files.
-        "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+        defaultCiphers.add("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA");
         // GCM (Galois/Counter Mode) requires JDK 8.
-        "TLS_RSA_WITH_AES_128_GCM_SHA256",
-        "TLS_RSA_WITH_AES_128_CBC_SHA",
+        defaultCiphers.add("TLS_RSA_WITH_AES_128_GCM_SHA256");
+        defaultCiphers.add("TLS_RSA_WITH_AES_128_CBC_SHA");
         // AES256 requires JCE unlimited strength jurisdiction policy files.
-        "TLS_RSA_WITH_AES_256_CBC_SHA"
-    };
+        defaultCiphers.add("TLS_RSA_WITH_AES_256_CBC_SHA");
+
+        Collections.addAll(defaultCiphers, DEFAULT_TLSV13_CIPHER_SUITES);
+
+        DEFAULT_CIPHER_SUITES = defaultCiphers.toArray(EmptyArrays.EMPTY_STRINGS);
+    }
+
+    /**
+     * Returns {@code true} if the JDK itself supports TLSv1.3, {@code false} otherwise.
+     */
+    static boolean isTLSv13SupportedByJDK() {
+        return TLSV1_3_JDK_SUPPORTED;
+    }
+
+    /**
+     * Returns {@code true} if the JDK itself supports TLSv1.3 and enabled it by default, {@code false} otherwise.
+     */
+    static boolean isTLSv13EnabledByJDK() {
+        return TLSV1_3_JDK_DEFAULT_ENABLED;
+    }
 
     /**
      * Add elements from {@code names} into {@code enabled} if they are in {@code supported}.
@@ -310,7 +390,7 @@ final class SslUtils {
         return packetLength;
     }
 
-    static void notifyHandshakeFailure(ChannelHandlerContext ctx, Throwable cause, boolean notify) {
+    static void handleHandshakeFailure(ChannelHandlerContext ctx, Throwable cause, boolean notify) {
         // We have may haven written some parts of data before an exception was thrown so ensure we always flush.
         // See https://github.com/netty/netty/issues/3900#issuecomment-172481830
         ctx.flush();
@@ -347,6 +427,29 @@ final class SslUtils {
                 src.readableBytes(), true, Base64Dialect.STANDARD, allocator);
         src.readerIndex(src.writerIndex());
         return dst;
+    }
+
+    /**
+     * Validate that the given hostname can be used in SNI extension.
+     */
+    static boolean isValidHostNameForSNI(String hostname) {
+        return hostname != null &&
+               hostname.indexOf('.') > 0 &&
+               !hostname.endsWith(".") &&
+               !NetUtil.isValidIpV4Address(hostname) &&
+               !NetUtil.isValidIpV6Address(hostname);
+    }
+
+    /**
+     * Returns {@code true} if the the given cipher (in openssl format) is for TLSv1.3, {@code false} otherwise.
+     */
+    static boolean isTLSv13Cipher(String cipher) {
+        // See https://tools.ietf.org/html/rfc8446#appendix-B.4
+        return TLSV13_CIPHERS.contains(cipher);
+    }
+
+    static boolean isEmpty(Object[] arr) {
+        return arr == null || arr.length == 0;
     }
 
     private SslUtils() {

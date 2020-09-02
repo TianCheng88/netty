@@ -17,11 +17,14 @@
 package io.netty.util;
 
 import io.netty.util.concurrent.DefaultThreadFactory;
+import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -37,7 +40,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * associated {@link Runnable}s.  When there is no thread to watch (i.e. all threads are dead), the daemon thread
  * will terminate itself, and a new daemon thread will be started again when a new watch is added.
  * </p>
+ *
+ * @deprecated will be removed in the next major release
  */
+@Deprecated
 public final class ThreadDeathWatcher {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(ThreadDeathWatcher.class);
@@ -72,12 +78,9 @@ public final class ThreadDeathWatcher {
      * @throws IllegalArgumentException if the specified {@code thread} is not alive
      */
     public static void watch(Thread thread, Runnable task) {
-        if (thread == null) {
-            throw new NullPointerException("thread");
-        }
-        if (task == null) {
-            throw new NullPointerException("task");
-        }
+        ObjectUtil.checkNotNull(thread, "thread");
+        ObjectUtil.checkNotNull(task, "task");
+
         if (!thread.isAlive()) {
             throw new IllegalArgumentException("thread must be alive.");
         }
@@ -89,21 +92,29 @@ public final class ThreadDeathWatcher {
      * Cancels the task scheduled via {@link #watch(Thread, Runnable)}.
      */
     public static void unwatch(Thread thread, Runnable task) {
-        if (thread == null) {
-            throw new NullPointerException("thread");
-        }
-        if (task == null) {
-            throw new NullPointerException("task");
-        }
-
-        schedule(thread, task, false);
+        schedule(ObjectUtil.checkNotNull(thread, "thread"),
+                ObjectUtil.checkNotNull(task, "task"),
+                false);
     }
 
     private static void schedule(Thread thread, Runnable task, boolean isWatch) {
         pendingEntries.add(new Entry(thread, task, isWatch));
 
         if (started.compareAndSet(false, true)) {
-            Thread watcherThread = threadFactory.newThread(watcher);
+            final Thread watcherThread = threadFactory.newThread(watcher);
+            // Set to null to ensure we not create classloader leaks by holds a strong reference to the inherited
+            // classloader.
+            // See:
+            // - https://github.com/netty/netty/issues/7290
+            // - https://bugs.openjdk.java.net/browse/JDK-7008595
+            AccessController.doPrivileged(new PrivilegedAction<Void>() {
+                @Override
+                public Void run() {
+                    watcherThread.setContextClassLoader(null);
+                    return null;
+                }
+            });
+
             watcherThread.start();
             ThreadDeathWatcher.watcherThread = watcherThread;
         }
@@ -119,9 +130,7 @@ public final class ThreadDeathWatcher {
      * @return {@code true} if and only if the watcher thread has been terminated
      */
     public static boolean awaitInactivity(long timeout, TimeUnit unit) throws InterruptedException {
-        if (unit == null) {
-            throw new NullPointerException("unit");
-        }
+        ObjectUtil.checkNotNull(unit, "unit");
 
         Thread watcherThread = ThreadDeathWatcher.watcherThread;
         if (watcherThread != null) {

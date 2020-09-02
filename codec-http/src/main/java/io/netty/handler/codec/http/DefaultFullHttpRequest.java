@@ -16,6 +16,7 @@
 package io.netty.handler.codec.http;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.util.IllegalReferenceCountException;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
@@ -142,14 +143,17 @@ public class DefaultFullHttpRequest extends DefaultHttpRequest implements FullHt
 
     @Override
     public FullHttpRequest replace(ByteBuf content) {
-        return new DefaultFullHttpRequest(protocolVersion(), method(), uri(), content, headers(), trailingHeaders());
+        FullHttpRequest request = new DefaultFullHttpRequest(protocolVersion(), method(), uri(), content,
+                headers().copy(), trailingHeaders().copy());
+        request.setDecoderResult(decoderResult());
+        return request;
     }
 
     @Override
     public int hashCode() {
         int hash = this.hash;
         if (hash == 0) {
-            if (content().refCnt() != 0) {
+            if (ByteBufUtil.isAccessible(content())) {
                 try {
                     hash = 31 + content().hashCode();
                 } catch (IllegalReferenceCountException ignored) {

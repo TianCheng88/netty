@@ -19,6 +19,7 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.ThrowableUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -78,12 +79,9 @@ public class CombinedChannelDuplexHandler<I extends ChannelInboundHandler, O ext
                             " was constructed with non-default constructor.");
         }
 
-        if (inboundHandler == null) {
-            throw new NullPointerException("inboundHandler");
-        }
-        if (outboundHandler == null) {
-            throw new NullPointerException("outboundHandler");
-        }
+        ObjectUtil.checkNotNull(inboundHandler, "inboundHandler");
+        ObjectUtil.checkNotNull(outboundHandler, "outboundHandler");
+
         if (inboundHandler instanceof ChannelOutboundHandler) {
             throw new IllegalArgumentException(
                     "inboundHandler must not implement " +
@@ -581,12 +579,12 @@ public class CombinedChannelDuplexHandler<I extends ChannelInboundHandler, O ext
 
         @Override
         public <T> Attribute<T> attr(AttributeKey<T> key) {
-            return ctx.attr(key);
+            return ctx.channel().attr(key);
         }
 
         @Override
         public <T> boolean hasAttr(AttributeKey<T> key) {
-            return ctx.hasAttr(key);
+            return ctx.channel().hasAttr(key);
         }
 
         final void remove() {

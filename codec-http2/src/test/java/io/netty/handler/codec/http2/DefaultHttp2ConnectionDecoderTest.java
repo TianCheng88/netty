@@ -37,13 +37,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static io.netty.buffer.Unpooled.EMPTY_BUFFER;
 import static io.netty.buffer.Unpooled.wrappedBuffer;
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_PRIORITY_WEIGHT;
-import static io.netty.handler.codec.http2.Http2CodecUtil.emptyPingBuf;
 import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
 import static io.netty.handler.codec.http2.Http2Stream.State.IDLE;
 import static io.netty.handler.codec.http2.Http2Stream.State.OPEN;
 import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_REMOTE;
 import static io.netty.util.CharsetUtil.UTF_8;
+
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.any;
@@ -250,9 +253,9 @@ public class DefaultHttp2ConnectionDecoderTest {
         }
     }
 
-    @Test(expected = Http2Exception.class)
+    @Test(expected = Http2Exception.StreamException.class)
     public void dataReadForUnknownStreamShouldApplyFlowControlAndFail() throws Exception {
-        when(connection.streamMayHaveExisted(STREAM_ID)).thenReturn(false);
+        when(connection.streamMayHaveExisted(STREAM_ID)).thenReturn(true);
         when(connection.stream(STREAM_ID)).thenReturn(null);
         final ByteBuf data = dummyData();
         int padding = 10;
@@ -263,6 +266,32 @@ public class DefaultHttp2ConnectionDecoderTest {
             try {
                 verify(localFlow)
                         .receiveFlowControlledFrame(eq((Http2Stream) null), eq(data), eq(padding), eq(true));
+                verify(localFlow).consumeBytes(eq((Http2Stream) null), eq(processedBytes));
+                verify(localFlow).frameWriter(any(Http2FrameWriter.class));
+                verifyNoMoreInteractions(localFlow);
+                verify(listener, never()).onDataRead(eq(ctx), anyInt(), any(ByteBuf.class), anyInt(), anyBoolean());
+            } finally {
+                data.release();
+            }
+        }
+    }
+
+    @Test(expected = Http2Exception.class)
+    public void dataReadForUnknownStreamThatCouldntExistFail() throws Exception {
+        when(connection.streamMayHaveExisted(STREAM_ID)).thenReturn(false);
+        when(connection.stream(STREAM_ID)).thenReturn(null);
+        final ByteBuf data = dummyData();
+        int padding = 10;
+        int processedBytes = data.readableBytes() + padding;
+        try {
+            decode().onDataRead(ctx, STREAM_ID, data, padding, true);
+        } catch (Http2Exception ex) {
+            assertThat(ex, not(instanceOf(Http2Exception.StreamException.class)));
+            throw ex;
+        } finally {
+            try {
+                verify(localFlow)
+                    .receiveFlowControlledFrame(eq((Http2Stream) null), eq(data), eq(padding), eq(true));
                 verify(localFlow).consumeBytes(eq((Http2Stream) null), eq(processedBytes));
                 verify(localFlow).frameWriter(any(Http2FrameWriter.class));
                 verifyNoMoreInteractions(localFlow);
@@ -676,13 +705,6 @@ public class DefaultHttp2ConnectionDecoderTest {
     }
 
     @Test(expected = Http2Exception.class)
-    public void goawayIncreasedLastStreamIdShouldThrow() throws Exception {
-        when(local.lastStreamKnownByPeer()).thenReturn(1);
-        when(connection.goAwayReceived()).thenReturn(true);
-        decode().onGoAwayRead(ctx, 3, 2L, EMPTY_BUFFER);
-    }
-
-    @Test(expected = Http2Exception.class)
     public void rstStreamReadForUnknownStreamShouldThrow() throws Exception {
         when(connection.streamMayHaveExisted(STREAM_ID)).thenReturn(false);
         when(connection.stream(STREAM_ID)).thenReturn(null);
@@ -714,15 +736,15 @@ public class DefaultHttp2ConnectionDecoderTest {
 
     @Test
     public void pingReadWithAckShouldNotifyListener() throws Exception {
-        decode().onPingAckRead(ctx, emptyPingBuf());
-        verify(listener).onPingAckRead(eq(ctx), eq(emptyPingBuf()));
+        decode().onPingAckRead(ctx, 0L);
+        verify(listener).onPingAckRead(eq(ctx), eq(0L));
     }
 
     @Test
     public void pingReadShouldReplyWithAck() throws Exception {
-        decode().onPingRead(ctx, emptyPingBuf());
-        verify(encoder).writePing(eq(ctx), eq(true), eq(emptyPingBuf()), eq(promise));
-        verify(listener, never()).onPingAckRead(eq(ctx), any(ByteBuf.class));
+        decode().onPingRead(ctx, 0L);
+        verify(encoder).writePing(eq(ctx), eq(true), eq(0L), eq(promise));
+        verify(listener, never()).onPingAckRead(eq(ctx), any(long.class));
     }
 
     @Test

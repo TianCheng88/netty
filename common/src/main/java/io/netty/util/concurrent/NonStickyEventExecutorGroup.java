@@ -259,7 +259,24 @@ public final class NonStickyEventExecutorGroup implements EventExecutorGroup {
                         }
                     } else {
                         state.set(NONE);
-                        return; // done
+                        // After setting the state to NONE, look at the tasks queue one more time.
+                        // If it is empty, then we can return from this method.
+                        // Otherwise, it means the producer thread has called execute(Runnable)
+                        // and enqueued a task in between the tasks.poll() above and the state.set(NONE) here.
+                        // There are two possible scenarios when this happen
+                        //
+                        // 1. The producer thread sees state == NONE, hence the compareAndSet(NONE, SUBMITTED)
+                        //    is successfully setting the state to SUBMITTED. This mean the producer
+                        //    will call / has called executor.execute(this). In this case, we can just return.
+                        // 2. The producer thread don't see the state change, hence the compareAndSet(NONE, SUBMITTED)
+                        //    returns false. In this case, the producer thread won't call executor.execute.
+                        //    In this case, we need to change the state to RUNNING and keeps running.
+                        //
+                        // The above cases can be distinguished by performing a
+                        // compareAndSet(NONE, RUNNING). If it returns "false", it is case 1; otherwise it is case 2.
+                        if (tasks.isEmpty() || !state.compareAndSet(NONE, RUNNING)) {
+                            return; // done
+                        }
                     }
                 }
             }
@@ -318,13 +335,7 @@ public final class NonStickyEventExecutorGroup implements EventExecutorGroup {
             if (state.compareAndSet(NONE, SUBMITTED)) {
                 // Actually it could happen that the runnable was picked up in between but we not care to much and just
                 // execute ourself. At worst this will be a NOOP when run() is called.
-                try {
-                    executor.execute(this);
-                } catch (Throwable e) {
-                    // Not reset the state as some other Runnable may be added to the queue already in the meantime.
-                    tasks.remove(command);
-                    PlatformDependent.throwException(e);
-                }
+                executor.execute(this);
             }
         }
     }

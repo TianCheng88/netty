@@ -99,7 +99,7 @@ public final class CorsConfigBuilder {
     /**
      * Web browsers may set the 'Origin' request header to 'null' if a resource is loaded
      * from the local file system. Calling this method will enable a successful CORS response
-     * with a {@code "null"} value for the the CORS response header 'Access-Control-Allow-Origin'.
+     * with a {@code "null"} value for the CORS response header 'Access-Control-Allow-Origin'.
      *
      * @return {@link CorsConfigBuilder} to support method chaining.
      */
@@ -341,7 +341,7 @@ public final class CorsConfigBuilder {
      *
      * CORS headers are set after a request is processed. This may not always be desired
      * and this setting will check that the Origin is valid and if it is not valid no
-     * further processing will take place, and a error will be returned to the calling client.
+     * further processing will take place, and an error will be returned to the calling client.
      *
      * @return {@link CorsConfigBuilder} to support method chaining.
      */

@@ -20,6 +20,8 @@ import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.base64.Base64;
 import io.netty.util.CharsetUtil;
 import io.netty.util.concurrent.FastThreadLocal;
+import io.netty.util.internal.PlatformDependent;
+import io.netty.util.internal.SuppressJava6Requirement;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -89,11 +91,23 @@ final class WebSocketUtil {
      * @param data The data to encode
      * @return An encoded string containing the data
      */
+    @SuppressJava6Requirement(reason = "Guarded with java version check")
     static String base64(byte[] data) {
+        if (PlatformDependent.javaVersion() >= 8) {
+            return java.util.Base64.getEncoder().encodeToString(data);
+        }
+        String encodedString;
         ByteBuf encodedData = Unpooled.wrappedBuffer(data);
-        ByteBuf encoded = Base64.encode(encodedData);
-        String encodedString = encoded.toString(CharsetUtil.UTF_8);
-        encoded.release();
+        try {
+            ByteBuf encoded = Base64.encode(encodedData);
+            try {
+                encodedString = encoded.toString(CharsetUtil.UTF_8);
+            } finally {
+                encoded.release();
+            }
+        } finally {
+            encodedData.release();
+        }
         return encodedString;
     }
 
@@ -105,11 +119,7 @@ final class WebSocketUtil {
      */
     static byte[] randomBytes(int size) {
         byte[] bytes = new byte[size];
-
-        for (int index = 0; index < size; index++) {
-            bytes[index] = (byte) randomNumber(0, 255);
-        }
-
+        PlatformDependent.threadLocalRandom().nextBytes(bytes);
         return bytes;
     }
 
@@ -121,7 +131,29 @@ final class WebSocketUtil {
      * @return A pseudo-random number
      */
     static int randomNumber(int minimum, int maximum) {
-        return (int) (Math.random() * maximum + minimum);
+        assert minimum < maximum;
+        double fraction = PlatformDependent.threadLocalRandom().nextDouble();
+
+        // the idea here is that nextDouble gives us a random value
+        //
+        //              0 <= fraction <= 1
+        //
+        // the distance from min to max declared as
+        //
+        //              dist = max - min
+        //
+        // satisfies the following
+        //
+        //              min + dist = max
+        //
+        // taking into account
+        //
+        //         0 <= fraction * dist <= dist
+        //
+        // we've got
+        //
+        //       min <= min + fraction * dist <= max
+        return (int) (minimum + fraction * (maximum - minimum));
     }
 
     /**

@@ -32,7 +32,7 @@ final class OpenSslJavaxX509Certificate extends X509Certificate {
     private final byte[] bytes;
     private X509Certificate wrapped;
 
-    public OpenSslJavaxX509Certificate(byte[] bytes) {
+    OpenSslJavaxX509Certificate(byte[] bytes) {
         this.bytes = bytes;
     }
 
@@ -94,6 +94,14 @@ final class OpenSslJavaxX509Certificate extends X509Certificate {
     @Override
     public byte[] getEncoded() {
         return bytes.clone();
+    }
+
+    /**
+     * Return the underyling {@code byte[]} without cloning it first. This {@code byte[]} <strong>must</strong> never
+     * be mutated.
+     */
+    byte[] getBytes() {
+        return bytes;
     }
 
     @Override

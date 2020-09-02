@@ -15,18 +15,59 @@
  */
 package io.netty.handler.codec.http.websocketx;
 
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaders;
+import org.junit.Test;
 
 import java.net.URI;
 
+import static org.junit.Assert.assertEquals;
+
 public class WebSocketClientHandshaker07Test extends WebSocketClientHandshakerTest {
+
+    @Test
+    public void testHostHeaderPreserved() {
+        URI uri = URI.create("ws://localhost:9999");
+        WebSocketClientHandshaker handshaker = newHandshaker(uri, null,
+                new DefaultHttpHeaders().set(HttpHeaderNames.HOST, "test.netty.io"), false);
+
+        FullHttpRequest request = handshaker.newHandshakeRequest();
+        try {
+            assertEquals("/", request.uri());
+            assertEquals("test.netty.io", request.headers().get(HttpHeaderNames.HOST));
+        } finally {
+            request.release();
+        }
+    }
+
     @Override
-    protected WebSocketClientHandshaker newHandshaker(URI uri) {
-        return new WebSocketClientHandshaker07(uri, WebSocketVersion.V07, null, false, null, 1024);
+    protected WebSocketClientHandshaker newHandshaker(URI uri, String subprotocol, HttpHeaders headers,
+                                                      boolean absoluteUpgradeUrl) {
+        return new WebSocketClientHandshaker07(uri, WebSocketVersion.V07, subprotocol, false, headers,
+          1024, true, false, 10000,
+          absoluteUpgradeUrl);
     }
 
     @Override
     protected CharSequence getOriginHeaderName() {
         return HttpHeaderNames.SEC_WEBSOCKET_ORIGIN;
+    }
+
+    @Override
+    protected CharSequence getProtocolHeaderName() {
+        return HttpHeaderNames.SEC_WEBSOCKET_PROTOCOL;
+    }
+
+    @Override
+    protected CharSequence[] getHandshakeRequiredHeaderNames() {
+        return new CharSequence[] {
+                HttpHeaderNames.UPGRADE,
+                HttpHeaderNames.CONNECTION,
+                HttpHeaderNames.SEC_WEBSOCKET_KEY,
+                HttpHeaderNames.HOST,
+                HttpHeaderNames.SEC_WEBSOCKET_VERSION,
+        };
     }
 }

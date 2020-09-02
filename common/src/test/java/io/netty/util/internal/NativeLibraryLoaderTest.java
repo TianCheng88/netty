@@ -15,18 +15,23 @@
  */
 package io.netty.util.internal;
 
+import io.netty.util.CharsetUtil;
 import org.junit.Test;
 
-import java.lang.reflect.Method;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
 import java.util.UUID;
 
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class NativeLibraryLoaderTest {
-
-    private static final Method getSupressedMethod = getGetSuppressed();
 
     @Test
     public void testFileNotFound() {
@@ -35,7 +40,7 @@ public class NativeLibraryLoaderTest {
             fail();
         } catch (UnsatisfiedLinkError error) {
             assertTrue(error.getCause() instanceof FileNotFoundException);
-            if (getSupressedMethod != null) {
+            if (PlatformDependent.javaVersion() >= 7) {
                 verifySuppressedException(error, UnsatisfiedLinkError.class);
             }
         }
@@ -48,19 +53,20 @@ public class NativeLibraryLoaderTest {
             fail();
         } catch (UnsatisfiedLinkError error) {
             assertTrue(error.getCause() instanceof FileNotFoundException);
-            if (getSupressedMethod != null) {
+            if (PlatformDependent.javaVersion() >= 7) {
                 verifySuppressedException(error, ClassNotFoundException.class);
             }
         }
     }
 
+    @SuppressJava6Requirement(reason = "uses Java 7+ Throwable#getSuppressed but is guarded by version checks")
     private static void verifySuppressedException(UnsatisfiedLinkError error,
             Class<?> expectedSuppressedExceptionClass) {
         try {
-            Throwable[] suppressed = (Throwable[]) getSupressedMethod.invoke(error.getCause());
+            Throwable[] suppressed = error.getCause().getSuppressed();
             assertTrue(suppressed.length == 1);
             assertTrue(suppressed[0] instanceof UnsatisfiedLinkError);
-            suppressed = (Throwable[]) getSupressedMethod.invoke(suppressed[0]);
+            suppressed = (suppressed[0]).getSuppressed();
             assertTrue(suppressed.length == 1);
             assertTrue(expectedSuppressedExceptionClass.isInstance(suppressed[0]));
         } catch (Exception e) {
@@ -68,14 +74,69 @@ public class NativeLibraryLoaderTest {
         }
     }
 
-    private static Method getGetSuppressed() {
-        if (PlatformDependent.javaVersion() < 7) {
-            return null;
+    @Test
+    public void testPatchingId() throws IOException {
+        testPatchingId0(true, false);
+    }
+
+    @Test
+    public void testPatchingIdWithOsArch() throws IOException {
+        testPatchingId0(true, true);
+    }
+
+    @Test
+    public void testPatchingIdNotMatch() throws IOException {
+        testPatchingId0(false, false);
+    }
+
+    @Test
+    public void testPatchingIdWithOsArchNotMatch() throws IOException {
+        testPatchingId0(false, true);
+    }
+
+    private static void testPatchingId0(boolean match, boolean withOsArch) throws IOException {
+        byte[] bytes = new byte[1024];
+        PlatformDependent.threadLocalRandom().nextBytes(bytes);
+        byte[] idBytes = ("/workspace/netty-tcnative/boringssl-static/target/" +
+                "native-build/target/lib/libnetty_tcnative-2.0.20.Final.jnilib").getBytes(CharsetUtil.UTF_8);
+
+        String originalName;
+        if (match) {
+            originalName = "netty-tcnative";
+        } else {
+            originalName = "nonexist_tcnative";
         }
+        String name = "shaded_" + originalName;
+        if (withOsArch) {
+            name += "_osx_x86_64";
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(bytes, 0, bytes.length);
+        out.write(idBytes, 0, idBytes.length);
+        out.write(bytes, 0 , bytes.length);
+
+        out.flush();
+        byte[] inBytes = out.toByteArray();
+        out.close();
+
+        InputStream inputStream = new ByteArrayInputStream(inBytes);
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         try {
-            return Throwable.class.getDeclaredMethod("getSuppressed");
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
+            assertEquals(match,
+                    NativeLibraryLoader.patchShadedLibraryId(inputStream, outputStream, originalName, name));
+
+            outputStream.flush();
+            byte[] outputBytes = outputStream.toByteArray();
+            assertArrayEquals(bytes, Arrays.copyOfRange(outputBytes, 0, bytes.length));
+            byte[] patchedId = Arrays.copyOfRange(outputBytes, bytes.length, bytes.length + idBytes.length);
+            assertEquals(!match, Arrays.equals(idBytes, patchedId));
+            assertArrayEquals(bytes,
+                    Arrays.copyOfRange(outputBytes, bytes.length + idBytes.length, outputBytes.length));
+            assertEquals(inBytes.length, outputBytes.length);
+        } finally {
+            inputStream.close();
+            outputStream.close();
         }
     }
 }

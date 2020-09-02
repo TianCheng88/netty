@@ -20,27 +20,10 @@ import io.netty.handler.codec.http2.Http2Stream.State;
 import io.netty.util.internal.UnstableApi;
 
 /**
- * A single stream within a HTTP/2 connection. To be used with the {@link Http2FrameCodec}.
+ * A single stream within an HTTP/2 connection. To be used with the {@link Http2FrameCodec}.
  */
 @UnstableApi
 public interface Http2FrameStream {
-
-    /**
-     * The stream with identifier 0, representing the HTTP/2 connection.
-     */
-    Http2FrameStream CONNECTION_STREAM = new Http2FrameStream() {
-
-        @Override
-        public int id() {
-            return 0;
-        }
-
-        @Override
-        public State state() {
-            return State.IDLE;
-        }
-    };
-
     /**
      * Returns the stream identifier.
      *

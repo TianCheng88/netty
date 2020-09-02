@@ -23,6 +23,7 @@ import io.netty.util.internal.SystemPropertyUtil;
 import org.junit.Assume;
 import org.junit.Test;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -32,6 +33,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
+import static io.netty.buffer.PoolChunk.runOffset;
+import static io.netty.buffer.PoolChunk.runPages;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -64,6 +67,21 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
     }
 
     @Test
+    public void testTrim() {
+        PooledByteBufAllocator allocator = newAllocator(true);
+
+        // Should return false as we never allocated from this thread yet.
+        assertFalse(allocator.trimCurrentThreadCache());
+
+        ByteBuf directBuffer = allocator.directBuffer();
+
+        assertTrue(directBuffer.release());
+
+        // Should return true now a cache exists for the calling thread.
+        assertTrue(allocator.trimCurrentThreadCache());
+    }
+
+    @Test
     public void testPooledUnsafeHeapBufferAndUnsafeDirectBuffer() {
         PooledByteBufAllocator allocator = newAllocator(true);
         ByteBuf directBuffer = allocator.directBuffer();
@@ -75,6 +93,25 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
         assertInstanceOf(heapBuffer,
                 PlatformDependent.hasUnsafe() ? PooledUnsafeHeapByteBuf.class : PooledHeapByteBuf.class);
         heapBuffer.release();
+    }
+
+    @Test
+    public void testIOBuffersAreDirectWhenUnsafeAvailableOrDirectBuffersPooled() {
+        PooledByteBufAllocator allocator = newAllocator(true);
+        ByteBuf ioBuffer = allocator.ioBuffer();
+
+        assertTrue(ioBuffer.isDirect());
+        ioBuffer.release();
+
+        PooledByteBufAllocator unpooledAllocator = newUnpooledAllocator();
+        ioBuffer = unpooledAllocator.ioBuffer();
+
+        if (PlatformDependent.hasUnsafe()) {
+            assertTrue(ioBuffer.isDirect());
+        } else {
+            assertFalse(ioBuffer.isDirect());
+        }
+        ioBuffer.release();
     }
 
     @Test
@@ -179,19 +216,6 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
     }
 
     @Test
-    public void testTinySubpageMetric() {
-        PooledByteBufAllocator allocator = new PooledByteBufAllocator(true, 1, 1, 8192, 11, 0, 0, 0);
-        ByteBuf buffer = allocator.heapBuffer(1);
-        try {
-            PoolArenaMetric metric = allocator.metric().heapArenas().get(0);
-            PoolSubpageMetric subpageMetric = metric.tinySubpages().get(0);
-            assertEquals(1, subpageMetric.maxNumElements() - subpageMetric.numAvailable());
-        } finally {
-            buffer.release();
-        }
-    }
-
-    @Test
     public void testAllocNotNull() {
         PooledByteBufAllocator allocator = new PooledByteBufAllocator(true, 1, 1, 8192, 11, 0, 0, 0);
         // Huge allocation
@@ -200,7 +224,6 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
         testAllocNotNull(allocator, 1024);
         // Small allocation
         testAllocNotNull(allocator, 512);
-        // Tiny allocation
         testAllocNotNull(allocator, 1);
     }
 
@@ -240,44 +263,114 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
         assertFalse(lists.get(5).iterator().hasNext());
     }
 
+    @Test
+    public void testCollapse() {
+        int pageSize = 8192;
+        //no cache
+        ByteBufAllocator allocator = new PooledByteBufAllocator(true, 1, 1, 8192, 11, 0, 0, 0);
+
+        ByteBuf b1 = allocator.buffer(pageSize * 4);
+        ByteBuf b2 = allocator.buffer(pageSize * 5);
+        ByteBuf b3 = allocator.buffer(pageSize * 6);
+
+        b2.release();
+        b3.release();
+
+        ByteBuf b4 = allocator.buffer(pageSize * 10);
+
+        PooledByteBuf<ByteBuffer> b = unwrapIfNeeded(b4);
+
+        //b2 and b3 are collapsed, b4 should start at offset 4
+        assertEquals(4, runOffset(b.handle));
+        assertEquals(10, runPages(b.handle));
+
+        b1.release();
+        b4.release();
+
+        //all ByteBuf are collapsed, b5 should start at offset 0
+        ByteBuf b5 = allocator.buffer(pageSize * 20);
+        b = unwrapIfNeeded(b5);
+
+        assertEquals(0, runOffset(b.handle));
+        assertEquals(20, runPages(b.handle));
+
+        b5.release();
+    }
+
+    @Test
+    public void testAllocateSmallOffset() {
+        int pageSize = 8192;
+        ByteBufAllocator allocator = new PooledByteBufAllocator(true, 1, 1, 8192, 11, 0, 0, 0);
+
+        int size = pageSize * 5;
+
+        ByteBuf[] bufs = new ByteBuf[10];
+        for (int i = 0; i < 10; i++) {
+            bufs[i] = allocator.buffer(size);
+        }
+
+        for (int i = 0; i < 5; i++) {
+            bufs[i].release();
+        }
+
+        //make sure we always allocate runs with small offset
+        for (int i = 0; i < 5; i++) {
+            ByteBuf buf = allocator.buffer(size);
+            PooledByteBuf<ByteBuffer> unwrapedBuf = unwrapIfNeeded(buf);
+            assertEquals(runOffset(unwrapedBuf.handle), i * 5);
+            bufs[i] = buf;
+        }
+
+        //release at reverse order
+        for (int i = 10 - 1; i >= 5; i--) {
+            bufs[i].release();
+        }
+
+        for (int i = 5; i < 10; i++) {
+            ByteBuf buf = allocator.buffer(size);
+            PooledByteBuf<ByteBuffer> unwrapedBuf = unwrapIfNeeded(buf);
+            assertEquals(runOffset(unwrapedBuf.handle), i * 5);
+            bufs[i] = buf;
+        }
+
+        for (int i = 0; i < 10; i++) {
+            bufs[i].release();
+        }
+    }
+
     @Test (timeout = 4000)
-    public void testThreadCacheDestroyedByThreadDeathWatcher() throws InterruptedException {
-        testThreadCacheDestroyedByThreadDeathWatcher(false);
+    public void testThreadCacheDestroyedByThreadCleaner() throws InterruptedException {
+        testThreadCacheDestroyed(false);
     }
 
     @Test (timeout = 4000)
     public void testThreadCacheDestroyedAfterExitRun() throws InterruptedException {
-        testThreadCacheDestroyedByThreadDeathWatcher(true);
+        testThreadCacheDestroyed(true);
     }
 
-    private static void testThreadCacheDestroyedByThreadDeathWatcher(boolean useRunnable) throws InterruptedException {
+    private static void testThreadCacheDestroyed(boolean useRunnable) throws InterruptedException {
         int numArenas = 11;
         final PooledByteBufAllocator allocator =
             new PooledByteBufAllocator(numArenas, numArenas, 8192, 1);
 
         final AtomicBoolean threadCachesCreated = new AtomicBoolean(true);
-        final CountDownLatch latch = new CountDownLatch(numArenas);
 
         final Runnable task = new Runnable() {
             @Override
             public void run() {
-                try {
-                    ByteBuf buf = allocator.newHeapBuffer(1024, 1024);
-                    for (int i = 0; i < buf.capacity(); i++) {
-                        buf.writeByte(0);
-                    }
-
-                    // Make sure that thread caches are actually created,
-                    // so that down below we are not testing for zero
-                    // thread caches without any of them ever having been initialized.
-                    if (allocator.metric().numThreadLocalCaches() == 0) {
-                        threadCachesCreated.set(false);
-                    }
-
-                    buf.release();
-                } finally {
-                    latch.countDown();
+                ByteBuf buf = allocator.newHeapBuffer(1024, 1024);
+                for (int i = 0; i < buf.capacity(); i++) {
+                    buf.writeByte(0);
                 }
+
+                // Make sure that thread caches are actually created,
+                // so that down below we are not testing for zero
+                // thread caches without any of them ever having been initialized.
+                if (allocator.metric().numThreadLocalCaches() == 0) {
+                    threadCachesCreated.set(false);
+                }
+
+                buf.release();
             }
         };
 
@@ -296,12 +389,14 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
                 assertFalse(thread.willCleanupFastThreadLocals());
             }
             thread.start();
+            thread.join();
         }
-
-        latch.await();
 
         // Wait for the ThreadDeathWatcher to have destroyed all thread caches
         while (allocator.metric().numThreadLocalCaches() > 0) {
+            // Signal we want to have a GC run to ensure we can process our ThreadCleanerReference
+            System.gc();
+            System.runFinalization();
             LockSupport.parkNanos(MILLISECONDS.toNanos(100));
         }
 
@@ -433,8 +528,14 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
                 Thread.sleep(100);
             }
         } finally {
+            // First mark all AllocationThreads to complete their work and then wait until these are complete
+            // and rethrow if there was any error.
             for (AllocationThread t : threads) {
-                t.finish();
+                t.markAsFinished();
+            }
+
+            for (AllocationThread t: threads) {
+                t.joinAndCheckForError();
             }
         }
     }
@@ -464,7 +565,7 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
         private final ByteBufAllocator allocator;
         private final AtomicReference<Object> finish = new AtomicReference<Object>();
 
-        public AllocationThread(ByteBufAllocator allocator) {
+        AllocationThread(ByteBufAllocator allocator) {
             this.allocator = allocator;
         }
 
@@ -474,49 +575,64 @@ public class PooledByteBufAllocatorTest extends AbstractByteBufAllocatorTest<Poo
                 int idx = 0;
                 while (finish.get() == null) {
                     for (int i = 0; i < 10; i++) {
-                        buffers.add(allocator.directBuffer(
-                                ALLOCATION_SIZES[Math.abs(idx++ % ALLOCATION_SIZES.length)],
-                                Integer.MAX_VALUE));
+                        int len = ALLOCATION_SIZES[Math.abs(idx++ % ALLOCATION_SIZES.length)];
+                        ByteBuf buf = allocator.directBuffer(len, Integer.MAX_VALUE);
+                        assertEquals(len, buf.writableBytes());
+                        while (buf.isWritable()) {
+                            buf.writeByte(i);
+                        }
+
+                        buffers.offer(buf);
                     }
-                    releaseBuffers();
+                    releaseBuffersAndCheckContent();
                 }
             } catch (Throwable cause) {
                 finish.set(cause);
             } finally {
-                releaseBuffers();
+                releaseBuffersAndCheckContent();
             }
         }
 
-        private void releaseBuffers() {
-            for (;;) {
+        private void releaseBuffersAndCheckContent() {
+            int i = 0;
+            while (!buffers.isEmpty()) {
                 ByteBuf buf = buffers.poll();
-                if (buf == null) {
-                    break;
+                while (buf.isReadable()) {
+                    assertEquals(i, buf.readByte());
                 }
                 buf.release();
+                i++;
             }
         }
 
-        public boolean isFinished() {
+        boolean isFinished() {
             return finish.get() != null;
         }
 
-        public void finish() throws Throwable {
+        void markAsFinished() {
+            finish.compareAndSet(null, Boolean.TRUE);
+        }
+
+        void joinAndCheckForError() throws Throwable {
             try {
                 // Mark as finish if not already done but ensure we not override the previous set error.
-                finish.compareAndSet(null, Boolean.TRUE);
                 join();
             } finally {
-                releaseBuffers();
+                releaseBuffersAndCheckContent();
             }
             checkForError();
         }
 
-        public void checkForError() throws Throwable {
+        void checkForError() throws Throwable {
             Object obj = finish.get();
             if (obj instanceof Throwable) {
                 throw (Throwable) obj;
             }
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static PooledByteBuf<ByteBuffer> unwrapIfNeeded(ByteBuf buf) {
+        return (PooledByteBuf<ByteBuffer>) (buf instanceof PooledByteBuf ? buf : buf.unwrap());
     }
 }

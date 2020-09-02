@@ -16,13 +16,10 @@
 package io.netty.handler.codec.dns;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.socket.InternetProtocolFamily;
 import io.netty.handler.codec.UnsupportedMessageTypeException;
 import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.UnstableApi;
-
-import static io.netty.handler.codec.dns.DefaultDnsRecordDecoder.ROOT;
 
 /**
  * The default {@link DnsRecordEncoder} implementation.
@@ -141,46 +138,27 @@ public class DefaultDnsRecordEncoder implements DnsRecordEncoder {
     }
 
     protected void encodeName(String name, ByteBuf buf) throws Exception {
-        if (ROOT.equals(name)) {
-            // Root domain
-            buf.writeByte(0);
-            return;
-        }
-
-        final String[] labels = name.split("\\.");
-        for (String label : labels) {
-            final int labelLen = label.length();
-            if (labelLen == 0) {
-                // zero-length label means the end of the name.
-                break;
-            }
-
-            buf.writeByte(labelLen);
-            ByteBufUtil.writeAscii(buf, label);
-        }
-
-        buf.writeByte(0); // marks end of name field
+        DnsCodecUtil.encodeDomainName(name, buf);
     }
 
-    // Package private so it can be reused in the test.
-    static byte padWithZeros(byte b, int lowOrderBitsToPreserve) {
+    private static byte padWithZeros(byte b, int lowOrderBitsToPreserve) {
         switch (lowOrderBitsToPreserve) {
         case 0:
             return 0;
         case 1:
-            return (byte) (0x01 & b);
+            return (byte) (0x80 & b);
         case 2:
-            return (byte) (0x03 & b);
+            return (byte) (0xC0 & b);
         case 3:
-            return (byte) (0x07 & b);
+            return (byte) (0xE0 & b);
         case 4:
-            return (byte) (0x0F & b);
+            return (byte) (0xF0 & b);
         case 5:
-            return (byte) (0x1F & b);
+            return (byte) (0xF8 & b);
         case 6:
-            return (byte) (0x3F & b);
+            return (byte) (0xFC & b);
         case 7:
-            return (byte) (0x7F & b);
+            return (byte) (0xFE & b);
         case 8:
             return b;
         default:

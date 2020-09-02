@@ -16,10 +16,12 @@
 
 package io.netty.util.concurrent;
 
+import io.netty.util.Signal;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -35,11 +37,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.lang.Math.max;
+import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.lessThan;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 @SuppressWarnings("unchecked")
 public class DefaultPromiseTest {
@@ -65,10 +65,45 @@ public class DefaultPromiseTest {
         return max(stackOverflowDepth << 1, stackOverflowDepth);
     }
 
+    @Test
+    public void testCancelDoesNotScheduleWhenNoListeners() {
+        EventExecutor executor = Mockito.mock(EventExecutor.class);
+        Mockito.when(executor.inEventLoop()).thenReturn(false);
+
+        Promise<Void> promise = new DefaultPromise<Void>(executor);
+        assertTrue(promise.cancel(false));
+        Mockito.verify(executor, Mockito.never()).execute(Mockito.any(Runnable.class));
+        assertTrue(promise.isCancelled());
+    }
+
+    @Test
+    public void testSuccessDoesNotScheduleWhenNoListeners() {
+        EventExecutor executor = Mockito.mock(EventExecutor.class);
+        Mockito.when(executor.inEventLoop()).thenReturn(false);
+
+        Object value = new Object();
+        Promise<Object> promise = new DefaultPromise<Object>(executor);
+        promise.setSuccess(value);
+        Mockito.verify(executor, Mockito.never()).execute(Mockito.any(Runnable.class));
+        assertSame(value, promise.getNow());
+    }
+
+    @Test
+    public void testFailureDoesNotScheduleWhenNoListeners() {
+        EventExecutor executor = Mockito.mock(EventExecutor.class);
+        Mockito.when(executor.inEventLoop()).thenReturn(false);
+
+        Exception cause = new Exception();
+        Promise<Void> promise = new DefaultPromise<Void>(executor);
+        promise.setFailure(cause);
+        Mockito.verify(executor, Mockito.never()).execute(Mockito.any(Runnable.class));
+        assertSame(cause, promise.cause());
+    }
+
     @Test(expected = CancellationException.class)
     public void testCancellationExceptionIsThrownWhenBlockingGet() throws InterruptedException, ExecutionException {
         final Promise<Void> promise = new DefaultPromise<Void>(ImmediateEventExecutor.INSTANCE);
-        promise.cancel(false);
+        assertTrue(promise.cancel(false));
         promise.get();
     }
 
@@ -76,8 +111,16 @@ public class DefaultPromiseTest {
     public void testCancellationExceptionIsThrownWhenBlockingGetWithTimeout() throws InterruptedException,
             ExecutionException, TimeoutException {
         final Promise<Void> promise = new DefaultPromise<Void>(ImmediateEventExecutor.INSTANCE);
-        promise.cancel(false);
+        assertTrue(promise.cancel(false));
         promise.get(1, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void testCancellationExceptionIsReturnedAsCause() throws InterruptedException,
+    ExecutionException, TimeoutException {
+        final Promise<Void> promise = new DefaultPromise<Void>(ImmediateEventExecutor.INSTANCE);
+        assertTrue(promise.cancel(false));
+        assertThat(promise.cause(), instanceOf(CancellationException.class));
     }
 
     @Test
@@ -239,6 +282,38 @@ public class DefaultPromiseTest {
                 executor.shutdownGracefully();
             }
         }
+    }
+
+    @Test
+    public void signalUncancellableCompletionValue() {
+        final Promise<Signal> promise = new DefaultPromise<Signal>(ImmediateEventExecutor.INSTANCE);
+        promise.setSuccess(Signal.valueOf(DefaultPromise.class, "UNCANCELLABLE"));
+        assertTrue(promise.isDone());
+        assertTrue(promise.isSuccess());
+    }
+
+    @Test
+    public void signalSuccessCompletionValue() {
+        final Promise<Signal> promise = new DefaultPromise<Signal>(ImmediateEventExecutor.INSTANCE);
+        promise.setSuccess(Signal.valueOf(DefaultPromise.class, "SUCCESS"));
+        assertTrue(promise.isDone());
+        assertTrue(promise.isSuccess());
+    }
+
+    @Test
+    public void setUncancellableGetNow() {
+        final Promise<String> promise = new DefaultPromise<String>(ImmediateEventExecutor.INSTANCE);
+        assertNull(promise.getNow());
+        assertTrue(promise.setUncancellable());
+        assertNull(promise.getNow());
+        assertFalse(promise.isDone());
+        assertFalse(promise.isSuccess());
+
+        promise.setSuccess("success");
+
+        assertTrue(promise.isDone());
+        assertTrue(promise.isSuccess());
+        assertEquals("success", promise.getNow());
     }
 
     private static void testStackOverFlowChainedFuturesA(int promiseChainLength, final EventExecutor executor,

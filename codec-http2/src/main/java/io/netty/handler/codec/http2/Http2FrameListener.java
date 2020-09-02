@@ -144,25 +144,23 @@ public interface Http2FrameListener {
      * Handles an inbound {@code PING} frame.
      *
      * @param ctx the context from the handler where the frame was read.
-     * @param data the payload of the frame. If this buffer needs to be retained by the listener
-     *            they must make a copy.
+     * @param data the payload of the frame.
      */
-    void onPingRead(ChannelHandlerContext ctx, ByteBuf data) throws Http2Exception;
+    void onPingRead(ChannelHandlerContext ctx, long data) throws Http2Exception;
 
     /**
      * Handles an inbound {@code PING} acknowledgment.
      *
      * @param ctx the context from the handler where the frame was read.
-     * @param data the payload of the frame. If this buffer needs to be retained by the listener
-     *            they must make a copy.
+     * @param data the payload of the frame.
      */
-    void onPingAckRead(ChannelHandlerContext ctx, ByteBuf data) throws Http2Exception;
+    void onPingAckRead(ChannelHandlerContext ctx, long data) throws Http2Exception;
 
     /**
      * Handles an inbound {@code PUSH_PROMISE} frame. Only called if {@code END_HEADERS} encountered.
      * <p>
      * Promised requests MUST be authoritative, cacheable, and safe.
-     * See <a href="https://tools.ietf.org/html/draft-ietf-httpbis-http2-17#section-8.2">[RFC http2], Section 8.2</a>.
+     * See <a href="https://tools.ietf.org/html/rfc7540#section-8.2">[RFC 7540], Section 8.2</a>.
      * <p>
      * Only one of the following methods will be called for each {@code HEADERS} frame sequence.
      * One will be called when the {@code END_HEADERS} flag has been received.

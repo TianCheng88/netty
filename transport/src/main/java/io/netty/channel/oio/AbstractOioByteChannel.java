@@ -27,12 +27,15 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.FileRegion;
 import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.socket.ChannelInputShutdownEvent;
+import io.netty.channel.socket.ChannelInputShutdownReadComplete;
 import io.netty.util.internal.StringUtil;
 
 import java.io.IOException;
 
 /**
  * Abstract base class for OIO which reads and writes bytes from/to a Socket
+ *
+ * @deprecated use NIO / EPOLL / KQUEUE transport.
  */
 public abstract class AbstractOioByteChannel extends AbstractOioChannel {
 
@@ -73,6 +76,7 @@ public abstract class AbstractOioByteChannel extends AbstractOioChannel {
             } else {
                 unsafe().close(unsafe().voidPromise());
             }
+            pipeline.fireUserEventTriggered(ChannelInputShutdownReadComplete.INSTANCE);
         }
     }
 
@@ -89,7 +93,10 @@ public abstract class AbstractOioByteChannel extends AbstractOioChannel {
         allocHandle.readComplete();
         pipeline.fireChannelReadComplete();
         pipeline.fireExceptionCaught(cause);
-        if (close || cause instanceof IOException) {
+
+        // If oom will close the read event, release connection.
+        // See https://github.com/netty/netty/issues/10434
+        if (close || cause instanceof OutOfMemoryError || cause instanceof IOException) {
             closeOnRead(pipeline);
         }
     }
